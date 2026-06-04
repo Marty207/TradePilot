@@ -7,17 +7,50 @@
   3. AI analyzes only that selected area
 */
 
+const TP_DEFAULT_WIDTH = 390;
+
+function getSidebarWidth(overlay) {
+  return overlay.getBoundingClientRect().width || TP_DEFAULT_WIDTH;
+}
+
+function syncPageLayout(overlay, open) {
+  const width = getSidebarWidth(overlay);
+  const px = `${width}px`;
+
+  document.documentElement.style.setProperty("--tp-sidebar-width", px);
+  overlay.style.setProperty("--tp-sidebar-width", px);
+
+  if (open) {
+    document.documentElement.classList.add("tp-page-shift");
+  } else {
+    document.documentElement.classList.remove("tp-page-shift");
+    document.documentElement.classList.remove("tp-resizing");
+  }
+}
+
+function setSidebarOpen(overlay, open) {
+  overlay.classList.toggle("tp-closed", !open);
+  syncPageLayout(overlay, open);
+  localStorage.setItem("tp-hidden", open ? "0" : "1");
+}
+
 if (!document.getElementById("tradepilot-overlay")) {
   const overlay = document.createElement("div");
   overlay.id = "tradepilot-overlay";
 
   overlay.innerHTML = `
     <div class="tp-header">
-      <div>
-        <div class="tp-brand">TradePilot</div>
-        <div class="tp-subtitle">AI chart analysis</div>
+      <div class="tp-brand-row">
+        <div class="tp-logo">TP</div>
+        <div>
+          <div class="tp-brand">TradePilot</div>
+          <div class="tp-subtitle">
+            <span class="tp-live-dot"></span>
+            AI chart analysis
+          </div>
+        </div>
       </div>
-      <button id="tp-close-btn">×</button>
+      <button id="tp-close-btn" type="button" aria-label="Close sidebar">×</button>
     </div>
 
     <div class="tp-controls">
@@ -39,32 +72,35 @@ if (!document.getElementById("tradepilot-overlay")) {
       <div class="tp-signal wait" id="tp-signal">WAIT</div>
 
       <div class="tp-grid">
-        <div>
+        <div class="tp-card">
           <span>Direction</span>
           <strong id="direction">NEUTRAL</strong>
         </div>
-        <div>
+        <div class="tp-card">
           <span>Confidence</span>
           <strong id="confidence">0%</strong>
+          <div class="tp-confidence-bar">
+            <div id="tp-confidence-fill"></div>
+          </div>
         </div>
       </div>
 
       <div class="tp-levels">
-        <div>
+        <div class="tp-card">
           <span>Entry</span>
           <strong id="entry">--</strong>
         </div>
-        <div>
+        <div class="tp-card">
           <span>Stop</span>
           <strong id="stopLoss">--</strong>
         </div>
-        <div>
+        <div class="tp-card">
           <span>Targets</span>
           <strong id="target">--</strong>
         </div>
       </div>
 
-      <button id="tp-analyze-btn">Analyze Area</button>
+      <button id="tp-analyze-btn" type="button">Analyze chart area</button>
 
       <div class="tp-section">
         <div class="tp-label">Analysis</div>
@@ -91,16 +127,18 @@ if (!document.getElementById("tradepilot-overlay")) {
   document.body.appendChild(overlay);
 
   const savedWidth = localStorage.getItem("tp-width");
-  if (savedWidth) overlay.style.width = savedWidth;
+  if (savedWidth) {
+    overlay.style.width = savedWidth;
+    document.documentElement.style.setProperty("--tp-sidebar-width", savedWidth);
+  }
 
   const savedHidden = localStorage.getItem("tp-hidden") === "1";
-  if (savedHidden) overlay.style.display = "none";
+  setSidebarOpen(overlay, !savedHidden);
 
   makeSidebarResizable(overlay);
 
   document.getElementById("tp-close-btn").addEventListener("click", () => {
-    overlay.style.display = "none";
-    localStorage.setItem("tp-hidden", "1");
+    setSidebarOpen(overlay, false);
   });
 
   document
@@ -110,9 +148,8 @@ if (!document.getElementById("tradepilot-overlay")) {
   chrome.runtime.onMessage.addListener((message) => {
     if (message.type !== "TOGGLE_SIDEBAR") return;
 
-    const isHidden = overlay.style.display === "none";
-    overlay.style.display = isHidden ? "" : "none";
-    localStorage.setItem("tp-hidden", isHidden ? "0" : "1");
+    const isClosed = overlay.classList.contains("tp-closed");
+    setSidebarOpen(overlay, isClosed);
   });
 }
 
@@ -131,6 +168,7 @@ function makeSidebarResizable(overlay) {
     startX = e.clientX;
     startWidth = overlay.getBoundingClientRect().width;
 
+    document.documentElement.classList.add("tp-resizing");
     document.body.style.userSelect = "none";
   });
 
@@ -143,19 +181,33 @@ function makeSidebarResizable(overlay) {
     const maxWidth = Math.min(560, window.innerWidth - 48);
     newWidth = Math.max(320, Math.min(newWidth, maxWidth));
 
-    overlay.style.width = `${newWidth}px`;
-    localStorage.setItem("tp-width", `${newWidth}px`);
+    const px = `${newWidth}px`;
+    overlay.style.width = px;
+    document.documentElement.style.setProperty("--tp-sidebar-width", px);
+    overlay.style.setProperty("--tp-sidebar-width", px);
+
+    if (!overlay.classList.contains("tp-closed")) {
+      syncPageLayout(overlay, true);
+    }
+
+    localStorage.setItem("tp-width", px);
   });
 
   document.addEventListener("mouseup", () => {
     if (!resizing) return;
 
     resizing = false;
+    document.documentElement.classList.remove("tp-resizing");
     document.body.style.userSelect = "";
   });
 }
 
 function startAreaSelection() {
+  const overlay = document.getElementById("tradepilot-overlay");
+  if (overlay?.classList.contains("tp-closed")) {
+    setSidebarOpen(overlay, true);
+  }
+
   document.getElementById("reason").textContent =
     "Drag over the exact chart area you want analyzed.";
 
@@ -228,9 +280,13 @@ async function analyzeSelectedArea(rect) {
   const symbol = document.getElementById("tp-symbol").value;
   const timeframe = document.getElementById("tp-timeframe").value;
 
+  const signal = document.getElementById("tp-signal");
+
   try {
     button.textContent = "Analyzing...";
     button.disabled = true;
+    signal.classList.add("analyzing");
+    signal.textContent = "ANALYZING";
 
     document.getElementById("reason").textContent =
       "Capturing selected area...";
@@ -284,7 +340,8 @@ async function analyzeSelectedArea(rect) {
     const overlay = document.getElementById("tradepilot-overlay");
     if (overlay) overlay.style.visibility = "";
 
-    button.textContent = "Analyze Area";
+    signal.classList.remove("analyzing");
+    button.textContent = "Analyze chart area";
     button.disabled = false;
   }
 }
@@ -365,8 +422,11 @@ function updateOverlay(data) {
   document.getElementById("direction").textContent =
     data.direction || "NEUTRAL";
 
-  document.getElementById("confidence").textContent =
-    `${data.confidence ?? 0}%`;
+  const confidence = data.confidence ?? 0;
+  document.getElementById("confidence").textContent = `${confidence}%`;
+
+  const fill = document.getElementById("tp-confidence-fill");
+  if (fill) fill.style.width = `${Math.min(100, Math.max(0, confidence))}%`;
 
   document.getElementById("entry").textContent =
     formatPrice(data.entry);
