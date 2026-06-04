@@ -5,6 +5,12 @@
   It does not save anything to downloads/files.
 */
 
+chrome.action.onClicked.addListener((tab) => {
+  if (!tab?.id) return;
+
+  chrome.tabs.sendMessage(tab.id, { type: "TOGGLE_SIDEBAR" }).catch(() => {});
+});
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message.type !== "CAPTURE_VISIBLE_TAB") return;
   

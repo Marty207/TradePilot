@@ -12,7 +12,7 @@ if (!document.getElementById("tradepilot-overlay")) {
   overlay.id = "tradepilot-overlay";
 
   overlay.innerHTML = `
-    <div class="tp-header" id="tp-drag-handle">
+    <div class="tp-header">
       <div>
         <div class="tp-brand">TradePilot</div>
         <div class="tp-subtitle">AI chart analysis</div>
@@ -89,34 +89,38 @@ if (!document.getElementById("tradepilot-overlay")) {
   `;
 
   document.body.appendChild(overlay);
+
   const savedWidth = localStorage.getItem("tp-width");
-  const savedLeft = localStorage.getItem("tp-left");
-  const savedTop = localStorage.getItem("tp-top");
-
   if (savedWidth) overlay.style.width = savedWidth;
-  if (savedLeft) overlay.style.left = savedLeft;
-  if (savedTop) overlay.style.top = savedTop;
 
-  overlay.style.right = "auto";
+  const savedHidden = localStorage.getItem("tp-hidden") === "1";
+  if (savedHidden) overlay.style.display = "none";
 
-  makeOverlayDraggable(overlay);
-  makeOverlayResizable(overlay);
+  makeSidebarResizable(overlay);
 
   document.getElementById("tp-close-btn").addEventListener("click", () => {
     overlay.style.display = "none";
+    localStorage.setItem("tp-hidden", "1");
   });
 
   document
     .getElementById("tp-analyze-btn")
     .addEventListener("click", startAreaSelection);
+
+  chrome.runtime.onMessage.addListener((message) => {
+    if (message.type !== "TOGGLE_SIDEBAR") return;
+
+    const isHidden = overlay.style.display === "none";
+    overlay.style.display = isHidden ? "" : "none";
+    localStorage.setItem("tp-hidden", isHidden ? "0" : "1");
+  });
 }
 
-function makeOverlayResizable(overlay) {
+function makeSidebarResizable(overlay) {
   const handle = document.getElementById("tp-resize-handle");
 
   let resizing = false;
   let startX = 0;
-  let startLeft = 0;
   let startWidth = 0;
 
   handle.addEventListener("mousedown", (e) => {
@@ -124,15 +128,8 @@ function makeOverlayResizable(overlay) {
     e.stopPropagation();
 
     resizing = true;
-
-    const rect = overlay.getBoundingClientRect();
-
     startX = e.clientX;
-    startLeft = rect.left;
-    startWidth = rect.width;
-
-    overlay.style.left = `${rect.left}px`;
-    overlay.style.right = "auto";
+    startWidth = overlay.getBoundingClientRect().width;
 
     document.body.style.userSelect = "none";
   });
@@ -140,25 +137,13 @@ function makeOverlayResizable(overlay) {
   document.addEventListener("mousemove", (e) => {
     if (!resizing) return;
 
-    const delta = e.clientX - startX;
+    const delta = startX - e.clientX;
+    let newWidth = startWidth + delta;
 
-    let newLeft = startLeft + delta;
-    let newWidth = startWidth - delta;
+    const maxWidth = Math.min(560, window.innerWidth - 48);
+    newWidth = Math.max(320, Math.min(newWidth, maxWidth));
 
-    if (newWidth < 320) {
-      newWidth = 320;
-      newLeft = startLeft + startWidth - 320;
-    }
-
-    if (newLeft < 8) {
-      newWidth = startWidth + startLeft - 8;
-      newLeft = 8;
-    }
-
-    overlay.style.left = `${newLeft}px`;
     overlay.style.width = `${newWidth}px`;
-
-    localStorage.setItem("tp-left", `${newLeft}px`);
     localStorage.setItem("tp-width", `${newWidth}px`);
   });
 
@@ -250,9 +235,14 @@ async function analyzeSelectedArea(rect) {
     document.getElementById("reason").textContent =
       "Capturing selected area...";
 
+    const overlay = document.getElementById("tradepilot-overlay");
+    overlay.style.visibility = "hidden";
+
     const captureResponse = await chrome.runtime.sendMessage({
       type: "CAPTURE_VISIBLE_TAB"
     });
+
+    overlay.style.visibility = "";
 
     if (!captureResponse?.ok) {
       throw new Error(captureResponse?.error || "Screenshot capture failed.");
@@ -263,7 +253,7 @@ async function analyzeSelectedArea(rect) {
     document.getElementById("reason").textContent =
       "Sending chart to AI...";
 
-    const response = await fetch("http://localhost:8000/analyze", {
+    const response = await fetch("https://tradepilot-production-407b.up.railway.app/analyze", {
       method: "POST",
       headers: {
         "Content-Type": "application/json"
@@ -291,6 +281,9 @@ async function analyzeSelectedArea(rect) {
 
     console.error("TradePilot error:", error);
   } finally {
+    const overlay = document.getElementById("tradepilot-overlay");
+    if (overlay) overlay.style.visibility = "";
+
     button.textContent = "Analyze Area";
     button.disabled = false;
   }
@@ -395,48 +388,4 @@ function updateOverlay(data) {
     data.aiNotes && data.aiNotes.length
       ? data.aiNotes.join("<br>")
       : "No watch notes returned.";
-}
-
-function makeOverlayDraggable(overlay) {
-  const handle = document.getElementById("tp-drag-handle");
-
-  let isDragging = false;
-  let offsetX = 0;
-  let offsetY = 0;
-
-  handle.addEventListener("mousedown", (event) => {
-    if (event.target.id === "tp-close-btn") return;
-
-    isDragging = true;
-
-    const rect = overlay.getBoundingClientRect();
-
-    offsetX = event.clientX - rect.left;
-    offsetY = event.clientY - rect.top;
-
-    overlay.style.left = `${rect.left}px`;
-    overlay.style.top = `${rect.top}px`;
-    overlay.style.right = "auto";
-
-    document.body.style.userSelect = "none";
-  });
-
-  document.addEventListener("mousemove", (event) => {
-    if (!isDragging) return;
-
-    const newLeft = event.clientX - offsetX;
-    const newTop = event.clientY - offsetY;
-
-    overlay.style.left = `${newLeft}px`;
-    overlay.style.top = `${newTop}px`;
-
-    localStorage.setItem("tp-left", `${newLeft}px`);
-    localStorage.setItem("tp-top", `${newTop}px`);
-
-  });
-
-  document.addEventListener("mouseup", () => {
-    isDragging = false;
-    document.body.style.userSelect = "";
-  });
 }
