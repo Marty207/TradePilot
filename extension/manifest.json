@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "TradePilot",
-  "version": "1.6.4",
+  "version": "1.6.5",
   "description": "AI Trader Analyst",
 
   "permissions": ["activeTab", "tabs", "sidePanel"],

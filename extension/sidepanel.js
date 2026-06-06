@@ -175,6 +175,18 @@ function buildScreenshotsPayload() {
   }));
 }
 
+function buildAnalyzePayload(symbol, screenshots) {
+  const primary =
+    screenshots.find((s) => s.timeframe === "15m") || screenshots[0];
+
+  return {
+    symbol,
+    screenshots,
+    timeframe: primary.timeframe,
+    screenshot: primary.screenshot,
+  };
+}
+
 async function captureTimeframe(timeframe) {
   if (captureInProgress) return;
   if (timeframe === "30m" && !include30mCheckbox.checked) return;
@@ -246,7 +258,7 @@ async function runAiAnalysis() {
     const response = await fetch(ANALYZE_API, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ symbol, screenshots }),
+      body: JSON.stringify(buildAnalyzePayload(symbol, screenshots)),
     });
 
     if (!response.ok) {
@@ -257,7 +269,15 @@ async function runAiAnalysis() {
 
     const data = await response.json();
     updatePanel(data);
-    document.getElementById("reason").textContent = "Analysis complete.";
+
+    if (data.mode === "AI_ONLY" && screenshots.length > 1) {
+      document.getElementById("reason").textContent =
+        `Analysis complete (used ${data.timeframe || "one"} chart only).`;
+      document.getElementById("aiNotes").textContent +=
+        " Redeploy the latest backend on Railway for full multi-timeframe analysis.";
+    } else {
+      document.getElementById("reason").textContent = "Analysis complete.";
+    }
   } catch (error) {
     console.error("TradePilot analyze error:", error);
     document.getElementById("reason").textContent =
