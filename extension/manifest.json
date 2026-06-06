@@ -1,10 +1,10 @@
 {
   "manifest_version": 3,
   "name": "TradePilot",
-  "version": "1.6.5",
+  "version": "1.8.0",
   "description": "AI Trader Analyst",
 
-  "permissions": ["activeTab", "tabs", "sidePanel"],
+  "permissions": ["activeTab", "tabs", "sidePanel", "storage"],
 
   "host_permissions": [
     "<all_urls>",

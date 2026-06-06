@@ -10,6 +10,39 @@ const TIMEFRAME_ROLES = {
 const BASE_TIMEFRAMES = ["1m", "5m", "15m"];
 const TIMEFRAME_ORDER = ["30m", "15m", "5m", "1m"];
 
+const LOADING_MESSAGES = [
+  "Reading your chart screenshots…",
+  "Comparing 1m, 5m, and 15m structure…",
+  "Mapping support and resistance…",
+  "Building trade plan…",
+];
+
+const viewAuth = document.getElementById("tp-view-auth");
+const viewSetup = document.getElementById("tp-view-setup");
+const viewLoading = document.getElementById("tp-view-loading");
+const viewResults = document.getElementById("tp-view-results");
+const accountBar = document.getElementById("tp-account-bar");
+const planPill = document.getElementById("tp-plan-pill");
+const usageText = document.getElementById("tp-usage-text");
+const subscribeBtn = document.getElementById("tp-subscribe-btn");
+const authForm = document.getElementById("tp-auth-form");
+const authMsg = document.getElementById("tp-auth-msg");
+const websiteLink = document.getElementById("tp-website-link");
+const loadingSub = document.getElementById("tp-loading-sub");
+const setupHint = document.getElementById("tp-setup-hint");
+const analyzeBtn = document.getElementById("tp-analyze-btn");
+const newCaptureBtn = document.getElementById("tp-new-capture-btn");
+const signalEl = document.getElementById("tp-signal");
+const include30mCheckbox = document.getElementById("tp-include-30m");
+const mtf30Row = document.getElementById("tp-mtf-30m-row");
+
+const savedScreenshots = {};
+let captureInProgress = false;
+let analysisInProgress = false;
+let loadingMessageTimer = null;
+let authMode = "login";
+let currentUser = null;
+
 function formatApiDetail(detail) {
   if (!detail) return null;
   if (typeof detail === "string") return detail;
@@ -31,61 +64,136 @@ function formatApiDetail(detail) {
 function formatError(error, responseStatus, errorData) {
   if (errorData) {
     const detail = formatApiDetail(errorData.detail);
-    if (detail) {
-      if (
-        detail.includes("timeframe") &&
-        detail.toLowerCase().includes("required")
-      ) {
-        return "Backend is outdated (AI_ONLY). Push the latest backend/ code to GitHub and redeploy on Railway.";
-      }
-      return detail;
-    }
+    if (detail) return detail;
   }
-
   if (error instanceof Error && error.message && error.message !== "[object Object]") {
     return error.message;
   }
   if (typeof error === "string") return error;
-  if (responseStatus === 404) {
-    return "Backend not found. In Railway: Settings → Networking → Generate public domain (*.up.railway.app).";
-  }
   if (responseStatus) return `Backend error (HTTP ${responseStatus}).`;
-  return "Could not reach the backend. Check Railway is running and reload the extension.";
+  return "Could not reach the backend. Check Railway and reload the extension.";
+}
+
+function showView(name) {
+  const views = {
+    auth: viewAuth,
+    setup: viewSetup,
+    loading: viewLoading,
+    results: viewResults,
+  };
+
+  Object.entries(views).forEach(([key, el]) => {
+    if (!el) return;
+    const active = key === name;
+    el.hidden = !active;
+    el.classList.toggle("tp-view-active", active);
+    el.classList.toggle("tp-view-enter", active);
+  });
+
+  if (name !== "loading") stopLoadingMessages();
+}
+
+function startLoadingMessages() {
+  let i = 0;
+  loadingSub.textContent = LOADING_MESSAGES[0];
+  loadingMessageTimer = setInterval(() => {
+    i = (i + 1) % LOADING_MESSAGES.length;
+    loadingSub.style.opacity = "0";
+    setTimeout(() => {
+      loadingSub.textContent = LOADING_MESSAGES[i];
+      loadingSub.style.opacity = "1";
+    }, 280);
+  }, 2400);
+}
+
+function stopLoadingMessages() {
+  if (loadingMessageTimer) {
+    clearInterval(loadingMessageTimer);
+    loadingMessageTimer = null;
+  }
 }
 
 async function checkBackendConnection() {
-  const reasonEl = document.getElementById("reason");
-
   try {
     const res = await fetch(`${TP_API_BASE}/`);
-    if (!res.ok) {
-      reasonEl.textContent = formatError(null, res.status, null);
-      return;
-    }
-
-    const data = await res.json();
-    if (data.mode !== "MTF") {
-      reasonEl.textContent =
-        "Backend is online but outdated (AI_ONLY). Redeploy the latest backend/ folder on Railway.";
-      document.getElementById("aiNotes").textContent =
-        "In Railway: set Root Directory to backend, add OPENAI_API_KEY, then redeploy from GitHub.";
-      return;
-    }
-
-    reasonEl.textContent =
-      "Backend connected. Capture your timeframes, then click Analyze.";
+    if (!res.ok) throw new Error();
+    await res.json();
   } catch {
-    reasonEl.textContent = `Cannot reach ${TP_API_BASE} — check Railway public domain and that the service is running.`;
+    if (setupHint) {
+      setupHint.textContent = "Cannot reach backend — check Railway is running.";
+    }
   }
 }
 
-const analyzeBtn = document.getElementById("tp-analyze-btn");
-const signalEl = document.getElementById("tp-signal");
-const include30mCheckbox = document.getElementById("tp-include-30m");
-const mtf30Row = document.getElementById("tp-mtf-30m-row");
+function setAuthMessage(text, ok = false) {
+  if (!authMsg) return;
+  authMsg.textContent = text;
+  authMsg.classList.toggle("ok", ok);
+}
 
-const savedScreenshots = {};
-let captureInProgress = false;
+function updateAccountBar(user) {
+  currentUser = user;
+  if (!user) {
+    accountBar.hidden = true;
+    return;
+  }
+
+  accountBar.hidden = false;
+  const active = user.subscription_status === "active";
+  planPill.textContent = active ? "Active" : "Inactive";
+  planPill.classList.toggle("pro", active);
+  usageText.textContent = active
+    ? `${user.analyses_remaining} analyses left`
+    : "$20/mo for full access";
+  subscribeBtn.hidden = active;
+}
+
+async function initSession() {
+  websiteLink.href = TP_WEBSITE_URL;
+  const user = await refreshAccount();
+  updateAccountBar(user);
+  showView(user ? "setup" : "auth");
+}
+
+document.querySelectorAll("[data-auth-tab]").forEach((tab) => {
+  tab.addEventListener("click", () => {
+    authMode = tab.dataset.authTab;
+    document.querySelectorAll("[data-auth-tab]").forEach((t) => {
+      t.classList.toggle("active", t === tab);
+    });
+    setAuthMessage("");
+    document.getElementById("tp-auth-password").autocomplete =
+      authMode === "register" ? "new-password" : "current-password";
+  });
+});
+
+authForm?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  setAuthMessage("");
+
+  const email = document.getElementById("tp-auth-email").value.trim();
+  const password = document.getElementById("tp-auth-password").value;
+
+  try {
+    const user =
+      authMode === "register"
+        ? await registerAccount(email, password)
+        : await loginAccount(email, password);
+    updateAccountBar(user);
+    setAuthMessage(`Signed in. ${user.analyses_remaining} analyses left.`, true);
+    setTimeout(() => showView("setup"), 400);
+  } catch (error) {
+    setAuthMessage(error.message);
+  }
+});
+
+subscribeBtn?.addEventListener("click", async () => {
+  try {
+    await startCheckout();
+  } catch (error) {
+    setupHint.textContent = error.message;
+  }
+});
 
 include30mCheckbox.addEventListener("change", () => {
   mtf30Row.classList.toggle("tp-mtf-disabled", !include30mCheckbox.checked);
@@ -97,6 +205,7 @@ include30mCheckbox.addEventListener("change", () => {
 });
 
 analyzeBtn.addEventListener("click", runAiAnalysis);
+newCaptureBtn.addEventListener("click", () => showView("setup"));
 
 document.querySelectorAll(".tp-mtf-capture-btn").forEach((btn) => {
   btn.addEventListener("click", () => captureTimeframe(btn.dataset.tf));
@@ -116,7 +225,8 @@ function getCapturedTimeframes() {
 
 function updateAnalyzeButton() {
   const count = getCapturedTimeframes().length;
-  analyzeBtn.disabled = count === 0 || captureInProgress;
+  const busy = captureInProgress || analysisInProgress;
+  analyzeBtn.disabled = count === 0 || busy;
   analyzeBtn.textContent =
     count === 0 ? "Analyze" : `Analyze (${count} screenshot${count > 1 ? "s" : ""})`;
 }
@@ -188,21 +298,18 @@ function buildAnalyzePayload(symbol, screenshots) {
 }
 
 async function captureTimeframe(timeframe) {
-  if (captureInProgress) return;
+  if (captureInProgress || analysisInProgress) return;
   if (timeframe === "30m" && !include30mCheckbox.checked) return;
 
   const tab = await getTradingViewTab();
   if (!tab) {
-    document.getElementById("reason").textContent =
-      "Open a TradingView chart tab, then try again.";
+    setupHint.textContent = "Open a TradingView chart tab, then try again.";
     return;
   }
 
   captureInProgress = true;
   updateMtfItem(timeframe, "capturing");
   updateAnalyzeButton();
-
-  document.getElementById("reason").textContent = `Drag over the ${timeframe} chart on TradingView…`;
 
   try {
     await chrome.tabs.update(tab.id, { active: true });
@@ -220,76 +327,97 @@ async function captureTimeframe(timeframe) {
     updateMtfItem(timeframe, "done");
 
     const count = getCapturedTimeframes().length;
-    document.getElementById("reason").textContent =
-      `${timeframe} saved. ${count} screenshot${count > 1 ? "s" : ""} ready — click Analyze when done.`;
-    document.getElementById("aiNotes").textContent =
-      "Screenshots stored. Run AI analysis when you are ready.";
+    setupHint.textContent = `${timeframe} saved — ${count} ready. Click Analyze when done.`;
   } catch (error) {
     updateMtfItem(timeframe, "error");
-    document.getElementById("reason").textContent = `Could not capture ${timeframe}.`;
-    document.getElementById("aiNotes").textContent = formatError(error);
+    setupHint.textContent = `Could not capture ${timeframe}: ${formatError(error)}`;
   } finally {
     captureInProgress = false;
     updateAnalyzeButton();
   }
 }
 
+function showResultsError(message) {
+  signalEl.className = "tp-signal wait tp-reveal";
+  signalEl.textContent = "ERROR";
+  document.getElementById("direction").textContent = "—";
+  document.getElementById("confidence").textContent = "0%";
+  document.getElementById("tp-confidence-fill").style.width = "0%";
+  document.getElementById("entry").textContent = "--";
+  document.getElementById("stopLoss").textContent = "--";
+  document.getElementById("target").textContent = "--";
+  document.getElementById("reason").textContent = "Could not complete analysis.";
+  document.getElementById("aiNotes").textContent = message;
+  showView("results");
+  replayRevealAnimations();
+}
+
+function replayRevealAnimations() {
+  viewResults.querySelectorAll(".tp-reveal").forEach((el) => {
+    el.classList.remove("tp-reveal-play");
+    void el.offsetWidth;
+    el.classList.add("tp-reveal-play");
+  });
+}
+
 async function runAiAnalysis() {
+  if (!currentUser) {
+    showView("auth");
+    return;
+  }
+
   const symbol = document.getElementById("tp-symbol").value;
   const screenshots = buildScreenshotsPayload();
 
   if (!screenshots.length) {
-    document.getElementById("reason").textContent =
-      "Capture at least one timeframe first.";
+    setupHint.textContent = "Capture at least one timeframe first.";
     return;
   }
 
-  analyzeBtn.disabled = true;
-  analyzeBtn.textContent = "Analyzing…";
-  signalEl.classList.add("analyzing");
-  signalEl.textContent = "ANALYZING";
-
-  document.getElementById("reason").textContent =
-    "Sending screenshots to AI…";
-  document.getElementById("aiNotes").textContent =
-    "This may take a few seconds.";
+  analysisInProgress = true;
+  updateAnalyzeButton();
+  showView("loading");
+  startLoadingMessages();
 
   try {
+    const authHeaders = await getAuthHeaders();
     const response = await fetch(ANALYZE_API, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...authHeaders },
       body: JSON.stringify(buildAnalyzePayload(symbol, screenshots)),
     });
 
     if (!response.ok) {
       const errorData = await response.json().catch(() => null);
-      const message = formatError(null, response.status, errorData);
-      throw new Error(message);
+      if (response.status === 401) {
+        await clearStoredAuth();
+        currentUser = null;
+        updateAccountBar(null);
+        showView("auth");
+        setAuthMessage(formatError(null, response.status, errorData));
+        return;
+      }
+      if (response.status === 402) {
+        showView("setup");
+        setupHint.textContent = formatError(null, response.status, errorData);
+        subscribeBtn.hidden = false;
+        return;
+      }
+      throw new Error(formatError(null, response.status, errorData));
     }
 
     const data = await response.json();
+    if (data.usage) updateAccountBar(data.usage);
+    else await initSession();
     updatePanel(data);
-
-    if (data.mode === "AI_ONLY" && screenshots.length > 1) {
-      document.getElementById("reason").textContent =
-        `Analysis complete (used ${data.timeframe || "one"} chart only).`;
-      document.getElementById("aiNotes").textContent +=
-        " Redeploy the latest backend on Railway for full multi-timeframe analysis.";
-    } else {
-      document.getElementById("reason").textContent = "Analysis complete.";
-    }
+    showView("results");
+    replayRevealAnimations();
   } catch (error) {
     console.error("TradePilot analyze error:", error);
-    document.getElementById("reason").textContent =
-      "Could not complete analysis.";
-    document.getElementById("aiNotes").textContent = formatError(error);
-    signalEl.classList.remove("analyzing");
-    signalEl.textContent = "WAIT";
-    signalEl.className = "tp-signal wait";
+    showResultsError(formatError(error));
   } finally {
-    analyzeBtn.disabled = false;
+    analysisInProgress = false;
     updateAnalyzeButton();
-    signalEl.classList.remove("analyzing");
   }
 }
 
@@ -352,3 +480,4 @@ function updatePanel(data) {
 include30mCheckbox.dispatchEvent(new Event("change"));
 updateAnalyzeButton();
 checkBackendConnection();
+initSession();

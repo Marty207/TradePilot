@@ -1,5 +1,9 @@
 fastapi
 uvicorn[standard]
 pydantic
+pydantic[email]
 openai
 python-dotenv
+pyjwt
+bcrypt
+stripe

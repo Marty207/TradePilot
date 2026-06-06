@@ -10,7 +10,9 @@
     <div class="tp-app">
       <header class="tp-header">
         <div class="tp-brand-row">
-          <img class="tp-logo" src="logo.png" alt="TradePilot" />
+          <div class="tp-logo-wrap">
+            <img class="tp-logo" src="logo.png" alt="TradePilot" />
+          </div>
           <div>
             <div class="tp-brand">TradePilot</div>
             <div class="tp-subtitle">
@@ -18,6 +20,13 @@
               Multi-timeframe AI analysis
             </div>
           </div>
+        </div>
+        <div class="tp-account-bar" id="tp-account-bar" hidden>
+          <span class="tp-plan-pill" id="tp-plan-pill">Inactive</span>
+          <span class="tp-usage-text" id="tp-usage-text">—</span>
+          <button type="button" class="tp-account-btn" id="tp-subscribe-btn">
+            Subscribe
+          </button>
         </div>
       </header>
 
@@ -29,67 +38,135 @@
       </div>
 
       <main class="tp-body">
-        <div class="tp-mtf-section">
-          <div class="tp-label">Step 1 — Capture screenshots</div>
-          <p class="tp-mtf-hint">
-            Switch your chart to each timeframe (1m, 5m, etc.), click
-            <strong>Capture</strong>, then <strong>drag</strong> over the chart
-            area to screenshot it.
+        <!-- Auth -->
+        <section id="tp-view-auth" class="tp-view tp-auth-view" hidden>
+          <div class="tp-auth-card">
+            <h2 class="tp-auth-title">Welcome to TradePilot</h2>
+            <p class="tp-auth-sub">
+              Sign in to analyze your charts. $20/month — full access.
+            </p>
+            <div class="tp-auth-tabs">
+              <button type="button" class="tp-auth-tab active" data-auth-tab="login">
+                Sign in
+              </button>
+              <button type="button" class="tp-auth-tab" data-auth-tab="register">
+                Create account
+              </button>
+            </div>
+            <p class="tp-auth-msg" id="tp-auth-msg"></p>
+            <form id="tp-auth-form">
+              <label class="tp-auth-field">
+                <span>Email</span>
+                <input id="tp-auth-email" type="email" autocomplete="email" required />
+              </label>
+              <label class="tp-auth-field">
+                <span>Password</span>
+                <input
+                  id="tp-auth-password"
+                  type="password"
+                  minlength="8"
+                  autocomplete="current-password"
+                  required
+                />
+              </label>
+              <button type="submit" class="tp-btn-primary tp-auth-submit">
+                Continue
+              </button>
+            </form>
+            <a
+              class="tp-auth-link"
+              id="tp-website-link"
+              href="#"
+              target="_blank"
+              rel="noopener"
+            >
+              Subscribe at tradepilot.app →
+            </a>
+          </div>
+        </section>
+
+        <!-- Setup: capture + analyze -->
+        <section id="tp-view-setup" class="tp-view tp-view-active">
+          <div class="tp-mtf-section">
+            <div class="tp-label">Step 1 — Capture screenshots</div>
+            <p class="tp-mtf-hint">
+              Switch your chart to each timeframe, click <strong>Capture</strong>,
+              then <strong>drag</strong> over the chart area.
+            </p>
+            <ul class="tp-mtf-list" id="tp-mtf-list">
+              <li class="tp-mtf-item" data-tf="1m">
+                <span class="tp-mtf-icon" aria-hidden="true">○</span>
+                <span class="tp-mtf-name">1m</span>
+                <span class="tp-mtf-status">Not captured</span>
+                <button type="button" class="tp-mtf-capture-btn" data-tf="1m">
+                  Capture
+                </button>
+              </li>
+              <li class="tp-mtf-item" data-tf="5m">
+                <span class="tp-mtf-icon" aria-hidden="true">○</span>
+                <span class="tp-mtf-name">5m</span>
+                <span class="tp-mtf-status">Not captured</span>
+                <button type="button" class="tp-mtf-capture-btn" data-tf="5m">
+                  Capture
+                </button>
+              </li>
+              <li class="tp-mtf-item" data-tf="15m">
+                <span class="tp-mtf-icon" aria-hidden="true">○</span>
+                <span class="tp-mtf-name">15m</span>
+                <span class="tp-mtf-status">Not captured</span>
+                <button type="button" class="tp-mtf-capture-btn" data-tf="15m">
+                  Capture
+                </button>
+              </li>
+              <li class="tp-mtf-item tp-mtf-optional" data-tf="30m" id="tp-mtf-30m-row">
+                <span class="tp-mtf-icon" aria-hidden="true">○</span>
+                <span class="tp-mtf-name">30m</span>
+                <span class="tp-mtf-status">Optional</span>
+                <button type="button" class="tp-mtf-capture-btn" data-tf="30m">
+                  Capture
+                </button>
+              </li>
+            </ul>
+            <label class="tp-mtf-toggle">
+              <input type="checkbox" id="tp-include-30m" checked />
+              Include 30m
+            </label>
+          </div>
+
+          <div class="tp-step-two">
+            <div class="tp-label">Step 2 — Run AI analysis</div>
+            <p class="tp-mtf-hint" id="tp-setup-hint">
+              After your screenshots are saved, click Analyze.
+            </p>
+            <button id="tp-analyze-btn" type="button" disabled>Analyze</button>
+          </div>
+        </section>
+
+        <!-- Loading -->
+        <section id="tp-view-loading" class="tp-view tp-loading-view" hidden>
+          <div class="tp-loader-wrap">
+            <div class="tp-loader-ring" aria-hidden="true"></div>
+            <div class="tp-loader-glow" aria-hidden="true"></div>
+          </div>
+          <h2 class="tp-loading-title">Analyzing…</h2>
+          <p class="tp-loading-sub" id="tp-loading-sub">
+            Reading your chart screenshots
           </p>
-          <ul class="tp-mtf-list" id="tp-mtf-list">
-            <li class="tp-mtf-item" data-tf="1m">
-              <span class="tp-mtf-icon" aria-hidden="true">○</span>
-              <span class="tp-mtf-name">1m</span>
-              <span class="tp-mtf-status">Not captured</span>
-              <button type="button" class="tp-mtf-capture-btn" data-tf="1m">
-                Capture
-              </button>
-            </li>
-            <li class="tp-mtf-item" data-tf="5m">
-              <span class="tp-mtf-icon" aria-hidden="true">○</span>
-              <span class="tp-mtf-name">5m</span>
-              <span class="tp-mtf-status">Not captured</span>
-              <button type="button" class="tp-mtf-capture-btn" data-tf="5m">
-                Capture
-              </button>
-            </li>
-            <li class="tp-mtf-item" data-tf="15m">
-              <span class="tp-mtf-icon" aria-hidden="true">○</span>
-              <span class="tp-mtf-name">15m</span>
-              <span class="tp-mtf-status">Not captured</span>
-              <button type="button" class="tp-mtf-capture-btn" data-tf="15m">
-                Capture
-              </button>
-            </li>
-            <li class="tp-mtf-item tp-mtf-optional" data-tf="30m" id="tp-mtf-30m-row">
-              <span class="tp-mtf-icon" aria-hidden="true">○</span>
-              <span class="tp-mtf-name">30m</span>
-              <span class="tp-mtf-status">Optional</span>
-              <button type="button" class="tp-mtf-capture-btn" data-tf="30m">
-                Capture
-              </button>
-            </li>
-          </ul>
-          <label class="tp-mtf-toggle">
-            <input type="checkbox" id="tp-include-30m" checked />
-            Include 30m
-          </label>
-        </div>
+          <div class="tp-loading-dots" aria-hidden="true">
+            <span></span><span></span><span></span>
+          </div>
+        </section>
 
-        <div class="tp-step-two">
-          <div class="tp-label">Step 2 — Run AI analysis</div>
-          <p class="tp-mtf-hint">
-            After your screenshots are saved, click Analyze to send them to the AI.
-          </p>
-          <button id="tp-analyze-btn" type="button" disabled>
-            Analyze
-          </button>
-        </div>
+        <!-- Results -->
+        <section id="tp-view-results" class="tp-view tp-results-view" hidden>
+          <div class="tp-results-header">
+            <span class="tp-results-badge">Analysis complete</span>
+            <h2 class="tp-results-title">Trade setup</h2>
+          </div>
 
-        <div class="tp-results">
-          <div class="tp-signal wait" id="tp-signal">WAIT</div>
+          <div class="tp-signal wait tp-reveal" id="tp-signal">WAIT</div>
 
-          <div class="tp-grid">
+          <div class="tp-grid tp-reveal tp-reveal-d1">
             <div class="tp-card">
               <span>Direction</span>
               <strong id="direction">NEUTRAL</strong>
@@ -103,7 +180,7 @@
             </div>
           </div>
 
-          <div class="tp-levels">
+          <div class="tp-levels tp-reveal tp-reveal-d2">
             <div class="tp-card">
               <span>Entry</span>
               <strong id="entry">--</strong>
@@ -118,23 +195,28 @@
             </div>
           </div>
 
-          <div class="tp-section">
+          <div class="tp-section tp-reveal tp-reveal-d3">
             <div class="tp-label">Analysis</div>
-            <div class="tp-text" id="reason">
-              Capture at least one timeframe, then click Analyze.
-            </div>
+            <div class="tp-text" id="reason">—</div>
           </div>
 
-          <div class="tp-section">
-            <div class="tp-label">Next Watch</div>
-            <div class="tp-text" id="aiNotes">No analysis yet.</div>
+          <div class="tp-section tp-reveal tp-reveal-d4">
+            <div class="tp-label">Next watch</div>
+            <div class="tp-text" id="aiNotes">—</div>
           </div>
-        </div>
+
+          <div class="tp-results-actions tp-reveal tp-reveal-d5">
+            <button type="button" id="tp-new-capture-btn" class="tp-btn-primary">
+              New capture
+            </button>
+          </div>
+        </section>
 
         <p class="tp-footer">Decision-support only. Not financial advice.</p>
       </main>
     </div>
     <script src="config.js"></script>
+    <script src="auth.js"></script>
     <script src="sidepanel.js"></script>
   </body>
 </html>

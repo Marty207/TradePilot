@@ -1,11 +1,23 @@
+import os
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException
+import stripe
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, EmailStr
 
 from ai_vision import analyze_chart_ai_only, analyze_chart_mtf
+from auth import get_current_user, get_optional_user, login_user, register_user
+from billing import create_checkout_session, handle_stripe_webhook, stripe_configured
+from database import (
+    analyses_limit_for_user,
+    get_usage_count,
+    increment_usage,
+    init_db,
+    user_access_payload,
+)
 
+AUTH_REQUIRED = os.getenv("AUTH_REQUIRED", "false").lower() == "true"
 
 app = FastAPI(title="TradePilot AI Backend")
 
@@ -16,6 +28,11 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.on_event("startup")
+def on_startup():
+    init_db()
 
 
 class ScreenshotFrame(BaseModel):
@@ -33,11 +50,18 @@ class AnalyzeRequest(BaseModel):
     screenshot: Optional[str] = None
 
 
+class AuthRequest(BaseModel):
+    email: EmailStr
+    password: str
+
+
 @app.get("/")
 def home():
     return {
         "message": "TradePilot backend is running",
         "mode": "MTF",
+        "auth": True,
+        "billing": stripe_configured(),
         "docs": "/docs",
     }
 
@@ -47,8 +71,70 @@ def health():
     return {"ok": True}
 
 
+@app.post("/auth/register")
+def register(request: AuthRequest):
+    return register_user(request.email, request.password)
+
+
+@app.post("/auth/login")
+def login(request: AuthRequest):
+    return login_user(request.email, request.password)
+
+
+@app.get("/auth/me")
+def me(user=Depends(get_current_user)):
+    return user_access_payload(user)
+
+
+@app.post("/billing/checkout")
+def billing_checkout(user=Depends(get_current_user)):
+    if not stripe_configured():
+        raise HTTPException(status_code=503, detail="Billing is not configured yet.")
+    try:
+        url = create_checkout_session(user["id"], user["email"])
+        return {"url": url}
+    except ValueError as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
+    except stripe.error.StripeError as error:
+        raise HTTPException(status_code=502, detail=str(error.user_message or error)) from error
+
+
+@app.post("/billing/webhook")
+async def billing_webhook(request: Request):
+    payload = await request.body()
+    signature = request.headers.get("stripe-signature", "")
+    try:
+        handle_stripe_webhook(payload, signature)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    except stripe.error.SignatureVerificationError as error:
+        raise HTTPException(status_code=400, detail="Invalid webhook signature.") from error
+    return {"received": True}
+
+
+def require_analyze_access(user=Depends(get_optional_user)):
+    if user:
+        used = get_usage_count(user["id"])
+        limit = analyses_limit_for_user(user)
+        if limit == 0:
+            raise HTTPException(
+                status_code=402,
+                detail="Subscribe for $20/month to start analyzing charts.",
+            )
+        if used >= limit:
+            raise HTTPException(
+                status_code=402,
+                detail=f"Monthly limit reached ({limit} analyses). Renews next month.",
+            )
+        return user
+
+    if AUTH_REQUIRED:
+        raise HTTPException(status_code=401, detail="Sign in to analyze charts.")
+    return None
+
+
 @app.post("/analyze")
-def analyze(request: AnalyzeRequest):
+def analyze(request: AnalyzeRequest, user=Depends(require_analyze_access)):
     try:
         if request.screenshots and len(request.screenshots) > 0:
             frames = [
@@ -61,9 +147,8 @@ def analyze(request: AnalyzeRequest):
                 }
                 for f in request.screenshots
             ]
-            return analyze_chart_mtf(request.symbol, frames)
-
-        if request.screenshot:
+            result = analyze_chart_mtf(request.symbol, frames)
+        elif request.screenshot:
             result = analyze_chart_ai_only(
                 base64_image=request.screenshot,
                 symbol=request.symbol,
@@ -71,9 +156,16 @@ def analyze(request: AnalyzeRequest):
             )
             result["symbol"] = request.symbol
             result["timeframe"] = request.timeframe
-            return result
+        else:
+            raise HTTPException(status_code=400, detail="No screenshots received.")
 
-        raise HTTPException(status_code=400, detail="No screenshots received.")
+        if user:
+            increment_usage(user["id"])
+            from database import get_user_by_id
+
+            result["usage"] = user_access_payload(get_user_by_id(user["id"]))
+
+        return result
     except HTTPException:
         raise
     except Exception as error:

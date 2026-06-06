@@ -1,5 +1,6 @@
 .env
 backend/.env
+backend/tradepilot.db
 venv/
 __pycache__/
 .DS_Store
