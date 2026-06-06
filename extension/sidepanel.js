@@ -152,7 +152,7 @@ function websiteHostname() {
   try {
     return new URL(TP_WEBSITE_URL).hostname;
   } catch {
-    return "tradepilot.vercel.app";
+    return "trade-pilot-rust.vercel.app";
   }
 }
 
