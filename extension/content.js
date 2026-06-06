@@ -1,349 +1,51 @@
 /*
-  TradePilot Select Area Version
+  TradePilot content script (TradingView)
 
-  Simple product flow:
-  1. Click Analyze
-  2. Drag over the chart area
-  3. AI analyzes only that selected area
+  Per-timeframe capture: user drags a region, then we screenshot that area.
+  AI analysis runs from the side panel after all captures are saved.
 */
 
-const TP_DEFAULT_WIDTH = 390;
+const TIMEFRAME_ROLES = {
+  "1m": "Entry timing — micro structure, candles, and precise trigger",
+  "5m": "Setup structure — momentum, pullbacks, and intraday pattern",
+  "15m": "Session trend — key zones, trend direction, and context",
+  "30m": "Higher-timeframe bias — major structure and dominant trend",
+};
 
-function getSidebarWidth(overlay) {
-  return overlay.getBoundingClientRect().width || TP_DEFAULT_WIDTH;
-}
+let activeSelection = null;
 
-function syncPageLayout(overlay, open) {
-  const width = getSidebarWidth(overlay);
-  const px = `${width}px`;
+cleanupLegacyOverlay();
 
-  document.documentElement.style.setProperty("--tp-sidebar-width", px);
-  overlay.style.setProperty("--tp-sidebar-width", px);
-
-  if (open) {
-    document.documentElement.classList.add("tp-page-shift");
-  } else {
-    document.documentElement.classList.remove("tp-page-shift");
-    document.documentElement.classList.remove("tp-resizing");
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message.type === "CAPTURE_TIMEFRAME") {
+    startDragCapture(message.timeframe)
+      .then((frame) => sendResponse({ ok: true, frame }))
+      .catch((error) =>
+        sendResponse({ ok: false, error: String(error.message || error) })
+      );
+    return true;
   }
+});
+
+function cleanupLegacyOverlay() {
+  document.getElementById("tradepilot-overlay")?.remove();
+  document.getElementById("tp-page-wrapper")?.remove();
+  removeSelectorLayer();
+  document.documentElement.classList.remove("tp-page-shift", "tp-resizing");
+  document.documentElement.style.removeProperty("--tp-sidebar-width");
 }
 
-function setSidebarOpen(overlay, open) {
-  overlay.classList.toggle("tp-closed", !open);
-  syncPageLayout(overlay, open);
-  localStorage.setItem("tp-hidden", open ? "0" : "1");
+function removeSelectorLayer() {
+  document.getElementById("tp-selector-layer")?.remove();
+  activeSelection = null;
 }
 
-if (!document.getElementById("tradepilot-overlay")) {
-  const overlay = document.createElement("div");
-  overlay.id = "tradepilot-overlay";
-
-  overlay.innerHTML = `
-    <div class="tp-header">
-      <div class="tp-brand-row">
-        <div class="tp-logo">TP</div>
-        <div>
-          <div class="tp-brand">TradePilot</div>
-          <div class="tp-subtitle">
-            <span class="tp-live-dot"></span>
-            AI chart analysis
-          </div>
-        </div>
-      </div>
-      <button id="tp-close-btn" type="button" aria-label="Close sidebar">×</button>
-    </div>
-
-    <div class="tp-controls">
-      <select id="tp-symbol">
-        <option value="NQ=F">NQ</option>
-        <option value="ES=F">ES</option>
-      </select>
-
-      <select id="tp-timeframe">
-        <option value="1m">1m</option>
-        <option value="3m">3m</option>
-        <option value="5m">5m</option>
-        <option value="15m">15m</option>
-        <option value="30m">30m</option>
-      </select>
-    </div>
-
-    <div class="tp-body">
-      <div class="tp-signal wait" id="tp-signal">WAIT</div>
-
-      <div class="tp-grid">
-        <div class="tp-card">
-          <span>Direction</span>
-          <strong id="direction">NEUTRAL</strong>
-        </div>
-        <div class="tp-card">
-          <span>Confidence</span>
-          <strong id="confidence">0%</strong>
-          <div class="tp-confidence-bar">
-            <div id="tp-confidence-fill"></div>
-          </div>
-        </div>
-      </div>
-
-      <div class="tp-levels">
-        <div class="tp-card">
-          <span>Entry</span>
-          <strong id="entry">--</strong>
-        </div>
-        <div class="tp-card">
-          <span>Stop</span>
-          <strong id="stopLoss">--</strong>
-        </div>
-        <div class="tp-card">
-          <span>Targets</span>
-          <strong id="target">--</strong>
-        </div>
-      </div>
-
-      <button id="tp-analyze-btn" type="button">Analyze chart area</button>
-
-      <div class="tp-section">
-        <div class="tp-label">Analysis</div>
-        <div class="tp-text" id="reason">
-          Click Analyze Area, then drag over the chart.
-        </div>
-      </div>
-
-      <div class="tp-section">
-        <div class="tp-label">Next Watch</div>
-        <div class="tp-text" id="aiNotes">
-          Waiting for chart selection.
-        </div>
-      </div>
-
-      <div class="tp-footer">
-        Decision-support only. Not financial advice.
-      </div>
-
-      <div id="tp-resize-handle"></div>
-    </div>
-  `;
-
-  document.body.appendChild(overlay);
-
-  const savedWidth = localStorage.getItem("tp-width");
-  if (savedWidth) {
-    overlay.style.width = savedWidth;
-    document.documentElement.style.setProperty("--tp-sidebar-width", savedWidth);
-  }
-
-  const savedHidden = localStorage.getItem("tp-hidden") === "1";
-  setSidebarOpen(overlay, !savedHidden);
-
-  makeSidebarResizable(overlay);
-
-  document.getElementById("tp-close-btn").addEventListener("click", () => {
-    setSidebarOpen(overlay, false);
-  });
-
-  document
-    .getElementById("tp-analyze-btn")
-    .addEventListener("click", startAreaSelection);
-
-  chrome.runtime.onMessage.addListener((message) => {
-    if (message.type !== "TOGGLE_SIDEBAR") return;
-
-    const isClosed = overlay.classList.contains("tp-closed");
-    setSidebarOpen(overlay, isClosed);
-  });
-}
-
-function makeSidebarResizable(overlay) {
-  const handle = document.getElementById("tp-resize-handle");
-
-  let resizing = false;
-  let startX = 0;
-  let startWidth = 0;
-
-  handle.addEventListener("mousedown", (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-
-    resizing = true;
-    startX = e.clientX;
-    startWidth = overlay.getBoundingClientRect().width;
-
-    document.documentElement.classList.add("tp-resizing");
-    document.body.style.userSelect = "none";
-  });
-
-  document.addEventListener("mousemove", (e) => {
-    if (!resizing) return;
-
-    const delta = startX - e.clientX;
-    let newWidth = startWidth + delta;
-
-    const maxWidth = Math.min(560, window.innerWidth - 48);
-    newWidth = Math.max(320, Math.min(newWidth, maxWidth));
-
-    const px = `${newWidth}px`;
-    overlay.style.width = px;
-    document.documentElement.style.setProperty("--tp-sidebar-width", px);
-    overlay.style.setProperty("--tp-sidebar-width", px);
-
-    if (!overlay.classList.contains("tp-closed")) {
-      syncPageLayout(overlay, true);
-    }
-
-    localStorage.setItem("tp-width", px);
-  });
-
-  document.addEventListener("mouseup", () => {
-    if (!resizing) return;
-
-    resizing = false;
-    document.documentElement.classList.remove("tp-resizing");
-    document.body.style.userSelect = "";
-  });
-}
-
-function startAreaSelection() {
-  const overlay = document.getElementById("tradepilot-overlay");
-  if (overlay?.classList.contains("tp-closed")) {
-    setSidebarOpen(overlay, true);
-  }
-
-  document.getElementById("reason").textContent =
-    "Drag over the exact chart area you want analyzed.";
-
-  const selector = document.createElement("div");
-  selector.id = "tp-selector-layer";
-
-  const box = document.createElement("div");
-  box.id = "tp-selection-box";
-
-  selector.appendChild(box);
-  document.body.appendChild(selector);
-
-  let startX = 0;
-  let startY = 0;
-  let isSelecting = false;
-
-  selector.addEventListener("mousedown", (event) => {
-    isSelecting = true;
-
-    startX = event.clientX;
-    startY = event.clientY;
-
-    box.style.left = `${startX}px`;
-    box.style.top = `${startY}px`;
-    box.style.width = "0px";
-    box.style.height = "0px";
-    box.style.display = "block";
-  });
-
-  selector.addEventListener("mousemove", (event) => {
-    if (!isSelecting) return;
-
-    const left = Math.min(startX, event.clientX);
-    const top = Math.min(startY, event.clientY);
-    const width = Math.abs(event.clientX - startX);
-    const height = Math.abs(event.clientY - startY);
-
-    box.style.left = `${left}px`;
-    box.style.top = `${top}px`;
-    box.style.width = `${width}px`;
-    box.style.height = `${height}px`;
-  });
-
-  selector.addEventListener("mouseup", async (event) => {
-    if (!isSelecting) return;
-
-    isSelecting = false;
-
-    const rect = {
-      left: Math.min(startX, event.clientX),
-      top: Math.min(startY, event.clientY),
-      width: Math.abs(event.clientX - startX),
-      height: Math.abs(event.clientY - startY)
-    };
-
-    selector.remove();
-
-    if (rect.width < 80 || rect.height < 80) {
-      document.getElementById("reason").textContent =
-        "Selected area is too small. Try a larger chart area.";
-      return;
-    }
-
-    await analyzeSelectedArea(rect);
-  });
-}
-
-async function analyzeSelectedArea(rect) {
-  const button = document.getElementById("tp-analyze-btn");
-  const symbol = document.getElementById("tp-symbol").value;
-  const timeframe = document.getElementById("tp-timeframe").value;
-
-  const signal = document.getElementById("tp-signal");
-
-  try {
-    button.textContent = "Analyzing...";
-    button.disabled = true;
-    signal.classList.add("analyzing");
-    signal.textContent = "ANALYZING";
-
-    document.getElementById("reason").textContent =
-      "Capturing selected area...";
-
-    const overlay = document.getElementById("tradepilot-overlay");
-    overlay.style.visibility = "hidden";
-
-    const captureResponse = await chrome.runtime.sendMessage({
-      type: "CAPTURE_VISIBLE_TAB"
+async function getThisTabId() {
+  return new Promise((resolve) => {
+    chrome.runtime.sendMessage({ type: "GET_SENDER_TAB_ID" }, (response) => {
+      resolve(response?.tabId ?? null);
     });
-
-    overlay.style.visibility = "";
-
-    if (!captureResponse?.ok) {
-      throw new Error(captureResponse?.error || "Screenshot capture failed.");
-    }
-
-    const croppedImage = await cropScreenshot(captureResponse.screenshot, rect);
-
-    document.getElementById("reason").textContent =
-      "Sending chart to AI...";
-
-    const response = await fetch("https://tradepilot-production-407b.up.railway.app/analyze", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        symbol,
-        timeframe,
-        screenshot: croppedImage
-      })
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => null);
-      throw new Error(errorData?.detail || "Backend analysis failed.");
-    }
-    
-    const data = await response.json();
-    updateOverlay(data);
-
-  } catch (error) {
-    document.getElementById("reason").textContent =
-      "Could not analyze the selected area.";
-
-    document.getElementById("aiNotes").textContent = String(error);
-
-    console.error("TradePilot error:", error);
-  } finally {
-    const overlay = document.getElementById("tradepilot-overlay");
-    if (overlay) overlay.style.visibility = "";
-
-    signal.classList.remove("analyzing");
-    button.textContent = "Analyze chart area";
-    button.disabled = false;
-  }
+  });
 }
 
 function cropScreenshot(screenshotDataUrl, rect) {
@@ -352,13 +54,11 @@ function cropScreenshot(screenshotDataUrl, rect) {
 
     image.onload = () => {
       const scale = window.devicePixelRatio || 1;
-
       const canvas = document.createElement("canvas");
       canvas.width = rect.width * scale;
       canvas.height = rect.height * scale;
 
       const ctx = canvas.getContext("2d");
-
       ctx.drawImage(
         image,
         rect.left * scale,
@@ -374,78 +74,127 @@ function cropScreenshot(screenshotDataUrl, rect) {
       resolve(canvas.toDataURL("image/png"));
     };
 
-    image.onerror = () => {
-      reject(new Error("Could not load captured screenshot."));
-    };
-
+    image.onerror = () => reject(new Error("Could not load captured screenshot."));
     image.src = screenshotDataUrl;
   });
 }
 
-function formatPrice(value) {
-  const num = Number(value);
+async function captureVisibleRegion(rect) {
+  const captureResponse = await chrome.runtime.sendMessage({
+    type: "CAPTURE_VISIBLE_TAB",
+    tabId: await getThisTabId(),
+  });
 
-  if (Number.isNaN(num)) {
-    return value ?? "--";
+  if (!captureResponse?.ok) {
+    throw new Error(captureResponse?.error || "Screenshot capture failed.");
   }
 
-  return num.toLocaleString("en-US", {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  });
+  return cropScreenshot(captureResponse.screenshot, rect);
 }
 
-function updateOverlay(data) {
-  const signal = document.getElementById("tp-signal");
-
-  const actionMap = {
-    ENTER_NOW: "ENTER NOW",
-    PLACE_LIMIT: "LIMIT ORDER",
-    NO_TRADE: "DO NOT ENTER",
-    WAIT: "WAIT",
-  };
-  
-  signal.textContent = actionMap[data.action] || data.action || "WAIT";
-
-  signal.classList.remove("enter", "limit", "wait", "no-trade");
-
-  if (data.action === "ENTER_NOW") {
-    signal.classList.add("enter");
-  } else if (data.action === "PLACE_LIMIT") {
-    signal.classList.add("limit");
-  } else if (data.action === "NO_TRADE") {
-    signal.classList.add("no-trade");
-  } else {
-    signal.classList.add("wait");
+function startDragCapture(timeframe) {
+  if (activeSelection) {
+    return Promise.reject(
+      new Error("Finish or cancel the current selection first (Esc).")
+    );
   }
 
-  document.getElementById("direction").textContent =
-    data.direction || "NEUTRAL";
+  return new Promise((resolve, reject) => {
+    const selector = document.createElement("div");
+    selector.id = "tp-selector-layer";
 
-  const confidence = data.confidence ?? 0;
-  document.getElementById("confidence").textContent = `${confidence}%`;
+    const hint = document.createElement("div");
+    hint.id = "tp-selector-hint";
+    hint.textContent = `Drag over the ${timeframe} chart area`;
 
-  const fill = document.getElementById("tp-confidence-fill");
-  if (fill) fill.style.width = `${Math.min(100, Math.max(0, confidence))}%`;
+    const box = document.createElement("div");
+    box.id = "tp-selection-box";
 
-  document.getElementById("entry").textContent =
-    formatPrice(data.entry);
-  
-  document.getElementById("stopLoss").textContent =
-    formatPrice(data.stopLoss);
+    selector.appendChild(hint);
+    selector.appendChild(box);
+    document.body.appendChild(selector);
 
-  document.getElementById("target").textContent = 
-    data.targets && data.targets.length
-      ? data.targets.map(formatPrice).join(" / ")
-      : "--";
+    let startX = 0;
+    let startY = 0;
+    let isSelecting = false;
 
-  document.getElementById("reason").innerHTML =
-    data.reason && data.reason.length
-      ? data.reason.join("<br>")
-      : "No analysis returned.";
+    const cleanup = () => {
+      removeSelectorLayer();
+      document.removeEventListener("keydown", onEscape);
+    };
 
-  document.getElementById("aiNotes").innerHTML =
-    data.aiNotes && data.aiNotes.length
-      ? data.aiNotes.join("<br>")
-      : "No watch notes returned.";
+    const finish = (fn) => {
+      cleanup();
+      fn();
+    };
+
+    const onEscape = (event) => {
+      if (event.key !== "Escape") return;
+      finish(() => reject(new Error("Capture cancelled.")));
+    };
+
+    document.addEventListener("keydown", onEscape);
+
+    selector.addEventListener("mousedown", (event) => {
+      isSelecting = true;
+      startX = event.clientX;
+      startY = event.clientY;
+      box.style.left = `${startX}px`;
+      box.style.top = `${startY}px`;
+      box.style.width = "0px";
+      box.style.height = "0px";
+      box.style.display = "block";
+    });
+
+    selector.addEventListener("mousemove", (event) => {
+      if (!isSelecting) return;
+
+      const left = Math.min(startX, event.clientX);
+      const top = Math.min(startY, event.clientY);
+      const width = Math.abs(event.clientX - startX);
+      const height = Math.abs(event.clientY - startY);
+
+      box.style.left = `${left}px`;
+      box.style.top = `${top}px`;
+      box.style.width = `${width}px`;
+      box.style.height = `${height}px`;
+    });
+
+    selector.addEventListener("mouseup", async (event) => {
+      if (!isSelecting) return;
+      isSelecting = false;
+
+      const rect = {
+        left: Math.min(startX, event.clientX),
+        top: Math.min(startY, event.clientY),
+        width: Math.abs(event.clientX - startX),
+        height: Math.abs(event.clientY - startY),
+      };
+
+      if (rect.width < 80 || rect.height < 80) {
+        finish(() =>
+          reject(new Error("Selected area is too small. Try a larger chart area."))
+        );
+        return;
+      }
+
+      hint.textContent = `Saving ${timeframe} screenshot…`;
+      box.style.display = "none";
+
+      try {
+        const screenshot = await captureVisibleRegion(rect);
+        finish(() =>
+          resolve({
+            timeframe,
+            screenshot,
+            role: TIMEFRAME_ROLES[timeframe] || `Chart context for ${timeframe}`,
+          })
+        );
+      } catch (error) {
+        finish(() => reject(error));
+      }
+    });
+
+    activeSelection = { timeframe, cleanup };
+  });
 }

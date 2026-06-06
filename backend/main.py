@@ -4,7 +4,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from ai_vision import analyze_chart_ai_only
+from ai_vision import analyze_chart_ai_only, analyze_chart_mtf
 
 
 app = FastAPI(title="TradePilot AI Backend")
@@ -18,9 +18,18 @@ app.add_middleware(
 )
 
 
+class ScreenshotFrame(BaseModel):
+    timeframe: str
+    screenshot: str
+    image_index: Optional[int] = None
+    total_images: Optional[int] = None
+    role: Optional[str] = None
+
+
 class AnalyzeRequest(BaseModel):
     symbol: str
-    timeframe: str
+    screenshots: Optional[list[ScreenshotFrame]] = None
+    timeframe: Optional[str] = None
     screenshot: Optional[str] = None
 
 
@@ -28,7 +37,7 @@ class AnalyzeRequest(BaseModel):
 def home():
     return {
         "message": "TradePilot backend is running",
-        "mode": "AI_ONLY",
+        "mode": "MTF",
         "docs": "/docs",
     }
 
@@ -40,17 +49,32 @@ def health():
 
 @app.post("/analyze")
 def analyze(request: AnalyzeRequest):
-    if not request.screenshot:
-        raise HTTPException(status_code=400, detail="No screenshot received.")
+    try:
+        if request.screenshots and len(request.screenshots) > 0:
+            frames = [
+                {
+                    "timeframe": f.timeframe,
+                    "screenshot": f.screenshot,
+                    "image_index": f.image_index,
+                    "total_images": f.total_images,
+                    "role": f.role,
+                }
+                for f in request.screenshots
+            ]
+            return analyze_chart_mtf(request.symbol, frames)
 
-    result = analyze_chart_ai_only(
-        base64_image=request.screenshot,
-        symbol=request.symbol,
-        timeframe=request.timeframe,
-    )
+        if request.screenshot:
+            result = analyze_chart_ai_only(
+                base64_image=request.screenshot,
+                symbol=request.symbol,
+                timeframe=request.timeframe or "unknown",
+            )
+            result["symbol"] = request.symbol
+            result["timeframe"] = request.timeframe
+            return result
 
-    result["symbol"] = request.symbol
-    result["timeframe"] = request.timeframe
-    result["mode"] = "AI_ONLY"
-
-    return result
+        raise HTTPException(status_code=400, detail="No screenshots received.")
+    except HTTPException:
+        raise
+    except Exception as error:
+        raise HTTPException(status_code=500, detail=str(error)) from error

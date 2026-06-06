@@ -1,7 +1,5 @@
 fastapi
-uvicorn
+uvicorn[standard]
 pydantic
-yfinance
-pandas
 openai
 python-dotenv

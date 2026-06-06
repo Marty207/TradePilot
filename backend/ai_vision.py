@@ -1,14 +1,7 @@
 """
 ai_vision.py
 
-AI-only trading analysis.
-
-This file lets the AI look at the TradingView screenshot and create the setup.
-
-Important:
-- It is decision-support only.
-- It does not guarantee profit.
-- It should say WAIT when the chart is unclear.
+AI-only trading analysis from chart screenshots.
 """
 
 import os
@@ -22,15 +15,6 @@ client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 
 def normalize_image_data(image_data: str):
-    """
-    Makes sure the image is in the correct format.
-
-    Chrome usually sends:
-    data:image/png;base64,....
-
-    If it only sends raw base64, we wrap it.
-    """
-
     if not image_data:
         return None
 
@@ -43,10 +27,6 @@ def normalize_image_data(image_data: str):
 
 
 def fallback_response(message: str):
-    """
-    Safe backup response if AI fails.
-    """
-
     return {
         "action": "WAIT",
         "direction": "NEUTRAL",
@@ -54,23 +34,13 @@ def fallback_response(message: str):
         "stopLoss": None,
         "targets": [],
         "confidence": 0,
-        "reason": [
-            message,
-            "AI-only analysis could not complete."
-        ],
-        "aiNotes": [
-            "No valid AI chart read was returned."
-        ]
+        "reason": [message, "AI analysis could not complete."],
+        "aiNotes": ["No valid AI chart read was returned."],
+        "timeframeBreakdown": [],
     }
 
 
 def analyze_chart_ai_only(base64_image: str, symbol: str, timeframe: str):
-    """
-    Main AI-only function.
-
-    The AI looks at the chart screenshot and returns a complete trade plan.
-    """
-
     if not os.getenv("OPENAI_API_KEY"):
         return fallback_response("No OpenAI API key found.")
 
@@ -86,30 +56,18 @@ Market:
 - Symbol: {symbol}
 - Timeframe: {timeframe}
 
-Your job:
 Analyze the visible chart and return ONE trade decision.
 
-Allowed actions:
-- ENTER_NOW
-- PLACE_LIMIT
-- WAIT
-- NO_TRADE
+Allowed actions: ENTER_NOW, PLACE_LIMIT, WAIT, NO_TRADE
 
-VERY IMPORTANT RULES:
-- Only suggest a trade if the setup is visually clear, and you think is best.
-- Risk/reward should be at least 1:1. But Dont Risk To Much.
-- Prefer WAIT if the entry, stop, or target is not obvious from the chart.
-- If the chart is unclear, choose WAIT or NO_TRADE. 
+Rules:
+- Only suggest a trade if the setup is visually clear.
+- Risk/reward should be at least 1:1.
+- Prefer WAIT if unclear.
+- Entry, stop, and targets must match visible structure.
 - Do not guarantee profit.
-- Do not overtrade.
-- Do not make up exact levels if the chart levels are not visually clear.
-- Prefer clean setups only.
-- Entry, stop loss, and targets must make sense from visible support/resistance, trend, liquidity, or candle structure.
-- If you cannot see price clearly, return WAIT, AND tell them what to do to help you see better (e.g. "Please provide a clearer screenshot with visible price levels").
-- Be practical and concise.
 
-Return ONLY valid JSON in this exact shape:
-
+Return ONLY valid JSON:
 {{
   "action": "ENTER_NOW | PLACE_LIMIT | WAIT | NO_TRADE",
   "direction": "LONG | SHORT | NEUTRAL",
@@ -117,42 +75,170 @@ Return ONLY valid JSON in this exact shape:
   "stopLoss": number or null,
   "targets": [number],
   "confidence": number from 0 to 100,
-  "reason": [
-    "short reason 1",
-    "short reason 2",
-    "short reason 3"
-  ],
-  "aiNotes": [
-    "what the trader should watch next"
+  "reason": ["...", "...", "..."],
+  "aiNotes": ["..."],
+  "timeframeBreakdown": []
+}}
+"""
+
+    return _call_vision_model(
+        symbol=symbol,
+        timeframe=timeframe,
+        content=[
+            {"type": "input_text", "text": prompt},
+            {"type": "input_image", "image_url": image_url},
+        ],
+    )
+
+
+TIMEFRAME_ROLES = {
+    "1m": "Entry timing — micro structure, candles, and precise trigger",
+    "5m": "Setup structure — momentum, pullbacks, and intraday pattern",
+    "15m": "Session trend — key zones, trend direction, and context",
+    "30m": "Higher-timeframe bias — major structure and dominant trend",
+}
+
+
+def _build_image_manifest(frames: list[dict]) -> str:
+    lines = [
+        "IMAGE MANIFEST (each screenshot is labeled immediately before its image):",
+        "",
+    ]
+    total = len(frames)
+
+    for frame in frames:
+        idx = frame["image_index"]
+        tf = frame["timeframe"]
+        role = frame["role"]
+        lines.append(f"  Image {idx} of {total} → TIMEFRAME: {tf} | ROLE: {role}")
+
+    lines.append("")
+    lines.append(
+        "IMPORTANT: The text block directly above each image tells you exactly "
+        "which timeframe that image is. Do not confuse images with each other."
+    )
+    return "\n".join(lines)
+
+
+def _label_before_image(frame: dict) -> str:
+    idx = frame["image_index"]
+    total = frame["total_images"]
+    tf = frame["timeframe"]
+    role = frame["role"]
+
+    return f"""
+══════════════════════════════════════
+IMAGE {idx} OF {total}
+TIMEFRAME: {tf}
+SYMBOL: same chart ({tf} candles)
+ROLE: {role}
+
+The NEXT image in this message is the {tf} chart screenshot.
+Analyze ONLY this image as the {tf} timeframe.
+══════════════════════════════════════
+""".strip()
+
+
+def analyze_chart_mtf(symbol: str, screenshots: list[dict]):
+    if not os.getenv("OPENAI_API_KEY"):
+        return fallback_response("No OpenAI API key found.")
+
+    if not screenshots:
+        return fallback_response("No screenshots received.")
+
+    frames = []
+    total = len(screenshots)
+
+    for i, shot in enumerate(screenshots):
+        url = normalize_image_data(shot.get("screenshot", ""))
+        if not url:
+            continue
+
+        tf = shot.get("timeframe", "unknown")
+        image_index = shot.get("image_index") or (i + 1)
+        total_images = shot.get("total_images") or total
+        role = shot.get("role") or TIMEFRAME_ROLES.get(tf, f"Chart context for {tf}")
+
+        frames.append(
+            {
+                "timeframe": tf,
+                "screenshot": url,
+                "image_index": image_index,
+                "total_images": total_images,
+                "role": role,
+            }
+        )
+
+    if not frames:
+        return fallback_response("No valid screenshots received.")
+
+    timeframes_list = ", ".join(f["timeframe"] for f in frames)
+    manifest = _build_image_manifest(frames)
+
+    prompt = f"""
+You are a PROFESSIONAL futures trading chart analyst doing MULTI-TIMEFRAME analysis.
+
+Market symbol: {symbol}
+
+You will receive {len(frames)} labeled chart screenshots.
+Each screenshot is preceded by a text label that states:
+- image number (e.g. IMAGE 2 OF 4)
+- exact timeframe (1m, 5m, 15m, or 30m)
+- what that timeframe is used for (role)
+
+{manifest}
+
+Read images in order. Use each timeframe for its stated role only.
+Synthesize ALL timeframes into ONE trade decision.
+
+Allowed actions: ENTER_NOW, PLACE_LIMIT, WAIT, NO_TRADE
+
+Rules:
+- Only ENTER if timeframes align or conflict is minor and explained.
+- Prefer WAIT if higher and lower timeframes conflict.
+- In timeframeBreakdown, reference the correct timeframe label for each summary.
+- Risk/reward at least 1:1 when suggesting a trade.
+- Do not guarantee profit.
+
+Return ONLY valid JSON:
+{{
+  "action": "ENTER_NOW | PLACE_LIMIT | WAIT | NO_TRADE",
+  "direction": "LONG | SHORT | NEUTRAL",
+  "entry": number or null,
+  "stopLoss": number or null,
+  "targets": [number],
+  "confidence": number from 0 to 100,
+  "reason": ["...", "...", "..."],
+  "aiNotes": ["..."],
+  "timeframeBreakdown": [
+    {{ "timeframe": "1m", "summary": "what you saw in the 1m image" }},
+    {{ "timeframe": "5m", "summary": "what you saw in the 5m image" }}
   ]
 }}
 """
 
+    content = [{"type": "input_text", "text": prompt}]
+
+    for frame in frames:
+        content.append({"type": "input_text", "text": _label_before_image(frame)})
+        content.append({"type": "input_image", "image_url": frame["screenshot"]})
+
+    return _call_vision_model(
+        symbol=symbol,
+        timeframe=timeframes_list,
+        content=content,
+    )
+
+
+def _call_vision_model(symbol: str, timeframe: str, content: list):
     try:
         response = client.responses.create(
             model="gpt-4.1-mini",
-            input=[
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "input_text",
-                            "text": prompt
-                        },
-                        {
-                            "type": "input_image",
-                            "image_url": image_url
-                        }
-                    ]
-                }
-            ]
+            input=[{"role": "user", "content": content}],
         )
 
         text = response.output_text.strip()
-
-        # Sometimes AI wraps JSON in ```json blocks.
         text = text.replace("```json", "").replace("```", "").strip()
-
         data = json.loads(text)
 
         return {
@@ -164,6 +250,10 @@ Return ONLY valid JSON in this exact shape:
             "confidence": data.get("confidence", 0),
             "reason": data.get("reason", []),
             "aiNotes": data.get("aiNotes", []),
+            "timeframeBreakdown": data.get("timeframeBreakdown", []),
+            "symbol": symbol,
+            "timeframe": timeframe,
+            "mode": "MTF" if len(content) > 2 else "AI_ONLY",
         }
 
     except Exception as error:
