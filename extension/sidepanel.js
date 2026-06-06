@@ -148,8 +148,17 @@ function updateAccountBar(user) {
   subscribeBtn.hidden = active;
 }
 
+function websiteHostname() {
+  try {
+    return new URL(TP_WEBSITE_URL).hostname;
+  } catch {
+    return "tradepilot.vercel.app";
+  }
+}
+
 async function initSession() {
   websiteLink.href = TP_WEBSITE_URL;
+  websiteLink.textContent = `Subscribe at ${websiteHostname()} →`;
   const user = await refreshAccount();
   updateAccountBar(user);
   showView(user ? "setup" : "auth");
