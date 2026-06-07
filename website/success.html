@@ -27,31 +27,82 @@
         <a class="btn btn-primary" href="index.html#account">Back to account</a>
       </div>
     </main>
-    <script src="js/config.js"></script>
+    <script src="/js/config.js"></script>
     <script>
       const msg = document.getElementById("success-msg");
       const params = new URLSearchParams(window.location.search);
       const sessionId = params.get("session_id");
       const token = localStorage.getItem("tp_token");
+      const API =
+        typeof TP_API_BASE !== "undefined"
+          ? TP_API_BASE
+          : "https://tradepilot-production-e711.up.railway.app";
+
+      function friendlyError(error) {
+        const text = error?.message || "";
+        if (text === "Failed to fetch" || error instanceof TypeError) {
+          return "Could not reach the server. Sign in on the home page to refresh your account.";
+        }
+        return text || "Payment received. Sign in to refresh your account.";
+      }
+
+      function activeMessage(user) {
+        return `You're active. ${user.analyses_remaining} analyses available this month. Open TradePilot on TradingView and sign in.`;
+      }
+
+      async function syncSubscription() {
+        const res = await fetch(`${API}/billing/sync`, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.detail || "Could not sync subscription.");
+        return data.user;
+      }
+
+      async function verifySession() {
+        const headers = { "Content-Type": "application/json" };
+        if (token) headers.Authorization = `Bearer ${token}`;
+        const res = await fetch(`${API}/billing/verify-session`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ session_id: sessionId }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.detail || "Could not activate subscription.");
+        return data.user;
+      }
 
       async function activate() {
         if (!sessionId) {
-          msg.textContent = "Payment received. Sign in on the home page to refresh your account.";
+          msg.textContent =
+            "Payment received. Sign in on the home page to refresh your account.";
           return;
         }
-        try {
-          const headers = { "Content-Type": "application/json" };
-          if (token) headers.Authorization = `Bearer ${token}`;
-          const res = await fetch(`${TP_API_BASE}/billing/verify-session`, {
-            method: "POST",
-            headers,
-            body: JSON.stringify({ session_id: sessionId }),
-          });
-          const data = await res.json().catch(() => ({}));
-          if (!res.ok) throw new Error(data.detail || "Could not activate subscription.");
-          msg.textContent = `You're active. ${data.user.analyses_remaining} analyses available this month. Open TradePilot on TradingView and sign in.`;
-        } catch (error) {
-          msg.textContent = error.message || "Payment received. Sign in to refresh your account.";
+
+        for (let attempt = 0; attempt < 3; attempt += 1) {
+          try {
+            const user = await verifySession();
+            msg.textContent = activeMessage(user);
+            return;
+          } catch (error) {
+            if (attempt < 2) {
+              await new Promise((resolve) => setTimeout(resolve, 1500));
+              continue;
+            }
+            if (token) {
+              try {
+                const user = await syncSubscription();
+                if (user.subscription_status === "active") {
+                  msg.textContent = activeMessage(user);
+                  return;
+                }
+              } catch {
+                // Fall through to friendly verify error.
+              }
+            }
+            msg.textContent = friendlyError(error);
+          }
         }
       }
 

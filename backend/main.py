@@ -25,11 +25,25 @@ from database import (
 
 AUTH_REQUIRED = os.getenv("AUTH_REQUIRED", "false").lower() == "true"
 
+
+def _cors_origins() -> list[str]:
+    website = os.getenv("WEBSITE_URL", "http://localhost:3000").rstrip("/")
+    return sorted(
+        {
+            website,
+            "https://trade-pilot-rust.vercel.app",
+            "http://localhost:3000",
+            "http://127.0.0.1:3000",
+            "http://localhost:5500",
+        }
+    )
+
+
 app = FastAPI(title="TradePilot AI Backend")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_cors_origins(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

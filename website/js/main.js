@@ -67,7 +67,7 @@ authForm?.addEventListener("submit", async (event) => {
         true
       );
     } else {
-      const synced = await syncSubscription(token);
+      const synced = await syncSubscription(data.token);
       if (synced?.subscription_status === "active") {
         setAuthMessage(
           `Subscription active. ${synced.analyses_remaining} analyses remaining this month.`,
