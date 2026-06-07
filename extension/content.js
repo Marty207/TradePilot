@@ -5,6 +5,14 @@
   AI analysis runs from the side panel after all captures are saved.
 */
 
+if (globalThis.__tradepilotContentLoaded) {
+  // Extension was re-injected on an already-loaded page.
+} else {
+  globalThis.__tradepilotContentLoaded = true;
+  initTradePilotContent();
+}
+
+function initTradePilotContent() {
 const TIMEFRAME_ROLES = {
   "1m": "Entry timing — micro structure, candles, and precise trigger",
   "5m": "Setup structure — momentum, pullbacks, and intraday pattern",
@@ -17,6 +25,11 @@ let activeSelection = null;
 cleanupLegacyOverlay();
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message.type === "PING") {
+    sendResponse({ ok: true });
+    return;
+  }
+
   if (message.type === "CAPTURE_TIMEFRAME") {
     startDragCapture(message.timeframe)
       .then((frame) => sendResponse({ ok: true, frame }))
@@ -197,4 +210,6 @@ function startDragCapture(timeframe) {
 
     activeSelection = { timeframe, cleanup };
   });
+}
+
 }

@@ -241,9 +241,36 @@ function updateAnalyzeButton() {
 }
 
 async function getTradingViewTab() {
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (!tab?.id || !tab.url?.includes("tradingview.com")) return null;
-  return tab;
+  const win = await chrome.windows.getCurrent();
+  const tabs = await chrome.tabs.query({
+    windowId: win.id,
+    url: ["*://*.tradingview.com/*"],
+  });
+  if (!tabs.length) return null;
+  return tabs.find((tab) => tab.active) || tabs[tabs.length - 1];
+}
+
+async function ensureContentScript(tabId) {
+  try {
+    const ping = await chrome.tabs.sendMessage(tabId, { type: "PING" });
+    if (ping?.ok) return;
+  } catch {
+    // Content script missing — inject below.
+  }
+
+  await chrome.scripting.insertCSS({
+    target: { tabId },
+    files: ["content.css"],
+  });
+  await chrome.scripting.executeScript({
+    target: { tabId },
+    files: ["content.js"],
+  });
+
+  const ping = await chrome.tabs.sendMessage(tabId, { type: "PING" });
+  if (!ping?.ok) {
+    throw new Error("Could not connect to TradingView. Refresh the chart tab and try again.");
+  }
 }
 
 function updateMtfItem(timeframe, state) {
@@ -322,6 +349,7 @@ async function captureTimeframe(timeframe) {
 
   try {
     await chrome.tabs.update(tab.id, { active: true });
+    await ensureContentScript(tab.id);
 
     const response = await chrome.tabs.sendMessage(tab.id, {
       type: "CAPTURE_TIMEFRAME",

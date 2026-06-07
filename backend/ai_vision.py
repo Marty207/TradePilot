@@ -62,7 +62,7 @@ Allowed actions: ENTER_NOW, PLACE_LIMIT, WAIT, NO_TRADE
 
 Rules:
 - Only suggest a trade if the setup is visually clear.
-- Risk/reward should be at least 1:1.
+- Risk/reward should be at least 1:1. But DONT Risk Too Much.
 - Prefer WAIT if unclear.
 - Entry, stop, and targets must match visible structure.
 - Do not guarantee profit.

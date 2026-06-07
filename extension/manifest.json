@@ -1,10 +1,10 @@
 {
   "manifest_version": 3,
   "name": "TradePilot",
-  "version": "1.8.1",
+  "version": "1.8.2",
   "description": "AI Trader Analyst",
 
-  "permissions": ["activeTab", "tabs", "sidePanel", "storage"],
+  "permissions": ["activeTab", "tabs", "sidePanel", "storage", "scripting"],
 
   "host_permissions": [
     "<all_urls>",
@@ -40,7 +40,10 @@
 
   "content_scripts": [
     {
-      "matches": ["https://www.tradingview.com/*"],
+      "matches": [
+        "https://www.tradingview.com/*",
+        "https://tradingview.com/*"
+      ],
       "js": ["content.js"],
       "css": ["content.css"],
       "run_at": "document_idle"
