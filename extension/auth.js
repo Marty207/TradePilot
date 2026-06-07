@@ -62,6 +62,14 @@ async function registerAccount(email, password) {
   return data.user;
 }
 
+async function syncSubscription() {
+  const { response, data } = await authFetch("/billing/sync", { method: "POST" });
+  if (!response.ok) return null;
+  const token = await getStoredToken();
+  await setStoredAuth(token, data.user);
+  return data.user;
+}
+
 async function refreshAccount() {
   const token = await getStoredToken();
   if (!token) return null;
@@ -72,6 +80,10 @@ async function refreshAccount() {
     return null;
   }
   await setStoredAuth(token, data);
+  if (data.subscription_status !== "active") {
+    const synced = await syncSubscription();
+    if (synced) return synced;
+  }
   return data;
 }
 

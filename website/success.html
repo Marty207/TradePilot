@@ -21,12 +21,41 @@
       <div class="success-card reveal visible">
         <div class="success-icon">✓</div>
         <h1 style="margin: 0 0 12px; font-size: 1.8rem">You're subscribed</h1>
-        <p class="lead" style="margin: 0 auto 24px; max-width: 360px">
-          Payment received. Return to TradePilot on TradingView — your account
-          will be active within a moment.
+        <p class="lead" id="success-msg" style="margin: 0 auto 24px; max-width: 360px">
+          Activating your subscription…
         </p>
-        <a class="btn btn-primary" href="index.html">Back to home</a>
+        <a class="btn btn-primary" href="index.html#account">Back to account</a>
       </div>
     </main>
+    <script src="js/config.js"></script>
+    <script>
+      const msg = document.getElementById("success-msg");
+      const params = new URLSearchParams(window.location.search);
+      const sessionId = params.get("session_id");
+      const token = localStorage.getItem("tp_token");
+
+      async function activate() {
+        if (!sessionId) {
+          msg.textContent = "Payment received. Sign in on the home page to refresh your account.";
+          return;
+        }
+        try {
+          const headers = { "Content-Type": "application/json" };
+          if (token) headers.Authorization = `Bearer ${token}`;
+          const res = await fetch(`${TP_API_BASE}/billing/verify-session`, {
+            method: "POST",
+            headers,
+            body: JSON.stringify({ session_id: sessionId }),
+          });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) throw new Error(data.detail || "Could not activate subscription.");
+          msg.textContent = `You're active. ${data.user.analyses_remaining} analyses available this month. Open TradePilot on TradingView and sign in.`;
+        } catch (error) {
+          msg.textContent = error.message || "Payment received. Sign in to refresh your account.";
+        }
+      }
+
+      activate();
+    </script>
   </body>
 </html>

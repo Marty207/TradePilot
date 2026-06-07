@@ -44,6 +44,52 @@ def create_checkout_session(user_id: int, email: str) -> str:
     return session.url
 
 
+def sync_user_subscription(user_id: int) -> bool:
+    if not stripe_configured():
+        raise ValueError("Stripe is not configured on the server.")
+
+    user = get_user_by_id(user_id)
+    if not user or not user["stripe_customer_id"]:
+        return False
+
+    subscriptions = stripe.Subscription.list(
+        customer=user["stripe_customer_id"],
+        status="active",
+        limit=1,
+    )
+    if subscriptions.data:
+        activate_pro_subscription(user_id)
+        return True
+    return False
+
+
+def verify_checkout_session(session_id: str, expected_user_id: int | None = None) -> int:
+    if not stripe_configured():
+        raise ValueError("Stripe is not configured on the server.")
+
+    session = stripe.checkout.Session.retrieve(session_id)
+    if session.status != "complete":
+        raise ValueError("Checkout is not complete yet. Wait a moment and refresh.")
+
+    user_id = None
+    metadata_user_id = (session.get("metadata") or {}).get("user_id")
+    if metadata_user_id:
+        user_id = int(metadata_user_id)
+    elif session.get("customer"):
+        user = get_user_by_stripe_customer(session["customer"])
+        if user:
+            user_id = user["id"]
+
+    if not user_id:
+        raise ValueError("Could not link this payment to your account.")
+
+    if expected_user_id is not None and user_id != expected_user_id:
+        raise ValueError("This payment belongs to a different account.")
+
+    activate_pro_subscription(user_id)
+    return user_id
+
+
 def handle_stripe_webhook(payload: bytes, signature: str) -> None:
     webhook_secret = os.getenv("STRIPE_WEBHOOK_SECRET", "")
     if not webhook_secret:
@@ -59,6 +105,14 @@ def handle_stripe_webhook(payload: bytes, signature: str) -> None:
         elif session.get("customer"):
             user = get_user_by_stripe_customer(session["customer"])
             if user:
+                activate_pro_subscription(user["id"])
+
+    elif event["type"] == "customer.subscription.created":
+        subscription = event["data"]["object"]
+        customer_id = subscription.get("customer")
+        if customer_id:
+            user = get_user_by_stripe_customer(customer_id)
+            if user and subscription.get("status") == "active":
                 activate_pro_subscription(user["id"])
 
     elif event["type"] in ("customer.subscription.deleted", "customer.subscription.updated"):

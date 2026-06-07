@@ -14,6 +14,20 @@ function setToken(token) {
   else localStorage.removeItem("tp_token");
 }
 
+async function syncSubscription(token) {
+  try {
+    const res = await fetch(`${TP_API_BASE}/billing/sync`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data.user;
+  } catch {
+    return null;
+  }
+}
+
 function setAuthMessage(text, ok = false) {
   authMsg.textContent = text;
   authMsg.classList.toggle("ok", ok);
@@ -47,10 +61,22 @@ authForm?.addEventListener("submit", async (event) => {
 
     setToken(data.token);
     const user = data.user;
-    setAuthMessage(
-      `Welcome back. ${user.analyses_remaining} analyses remaining this month.`,
-      true
-    );
+    if (user.subscription_status === "active") {
+      setAuthMessage(
+        `Welcome back. ${user.analyses_remaining} analyses remaining this month.`,
+        true
+      );
+    } else {
+      const synced = await syncSubscription(token);
+      if (synced?.subscription_status === "active") {
+        setAuthMessage(
+          `Subscription active. ${synced.analyses_remaining} analyses remaining this month.`,
+          true
+        );
+      } else {
+        setAuthMessage("Signed in. Subscribe to unlock analyses.", false);
+      }
+    }
   } catch (error) {
     setAuthMessage(error.message || "Something went wrong.");
   }

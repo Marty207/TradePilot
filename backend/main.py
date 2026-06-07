@@ -8,7 +8,13 @@ from pydantic import BaseModel, EmailStr
 
 from ai_vision import analyze_chart_ai_only, analyze_chart_mtf
 from auth import get_current_user, get_optional_user, login_user, register_user
-from billing import create_checkout_session, handle_stripe_webhook, stripe_configured
+from billing import (
+    create_checkout_session,
+    handle_stripe_webhook,
+    stripe_configured,
+    sync_user_subscription,
+    verify_checkout_session,
+)
 from database import (
     analyses_limit_for_user,
     get_usage_count,
@@ -55,6 +61,10 @@ class AuthRequest(BaseModel):
     password: str
 
 
+class VerifySessionRequest(BaseModel):
+    session_id: str
+
+
 @app.get("/")
 def home():
     return {
@@ -95,6 +105,47 @@ def billing_checkout(user=Depends(get_current_user)):
         return {"url": url}
     except ValueError as error:
         raise HTTPException(status_code=503, detail=str(error)) from error
+    except stripe.error.StripeError as error:
+        raise HTTPException(status_code=502, detail=str(error.user_message or error)) from error
+
+
+@app.post("/billing/sync")
+def billing_sync(user=Depends(get_current_user)):
+    if not stripe_configured():
+        raise HTTPException(status_code=503, detail="Billing is not configured yet.")
+    try:
+        from database import get_user_by_id
+
+        active = sync_user_subscription(user["id"])
+        refreshed = get_user_by_id(user["id"])
+        payload = user_access_payload(refreshed)
+        if not active and payload["subscription_status"] != "active":
+            raise HTTPException(
+                status_code=404,
+                detail="No active subscription found for this account.",
+            )
+        return {"ok": True, "user": payload}
+    except ValueError as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
+    except stripe.error.StripeError as error:
+        raise HTTPException(status_code=502, detail=str(error.user_message or error)) from error
+
+
+@app.post("/billing/verify-session")
+def billing_verify_session(
+    request: VerifySessionRequest,
+    user=Depends(get_optional_user),
+):
+    if not stripe_configured():
+        raise HTTPException(status_code=503, detail="Billing is not configured yet.")
+    try:
+        from database import get_user_by_id
+
+        expected_user_id = user["id"] if user else None
+        user_id = verify_checkout_session(request.session_id, expected_user_id)
+        return {"ok": True, "user": user_access_payload(get_user_by_id(user_id))}
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
     except stripe.error.StripeError as error:
         raise HTTPException(status_code=502, detail=str(error.user_message or error)) from error
 
